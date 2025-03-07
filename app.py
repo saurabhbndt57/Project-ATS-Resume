@@ -1,15 +1,11 @@
 from dotenv import load_dotenv
 import streamlit as st
 import os
-import io
-import base64
-from PIL import Image
-import pdf2image
 import google.generativeai as genai
-from fpdf import FPDF
-import random
-import matplotlib.pyplot as plt
-import numpy as np
+import PyPDF2
+from io import BytesIO
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 
 # Load environment variables
 load_dotenv()
@@ -22,126 +18,90 @@ if not API_KEY:
 
 genai.configure(api_key=API_KEY)
 
-# Streamlit UI
+@st.cache_data
+def get_gemini_response(input_text, prompt):
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    try:
+        response = model.generate_content([input_text, prompt])
+        return response.text
+    except Exception as e:
+        return f"Error fetching response: {e}"
+
 st.title("🎨 ATS Resume Expert & MCQ Test Generator")
 st.subheader("Your AI-powered Resume & Interview Preparation Tool")
 
+# Job description input
 input_text = st.text_area("📄 Job Description:")
+
+# Resume upload
 uploaded_file = st.file_uploader("📤 Upload your resume (PDF)...", type=['pdf'])
-if uploaded_file:
-    st.success("✅ PDF Uploaded Successfully!")
 
-# Company Selection Dropdown
-company = st.selectbox("🏢 Select a company for job preparation:", ["TCS", "Infosys", "Accenture", "Celebal"])
-
+# Company and topic selection
+company = st.selectbox("🏢 Select a company:", ["TCS", "Infosys", "Accenture", "Celebal"])
 topic = st.selectbox("📌 Select a topic:", ["Core Python", "Machine Learning", "Deep Learning", "Statistics", "SQL", "Data Visualization"])
 difficulty = st.selectbox("⚡ Select difficulty level:", ["Easy", "Intermediate", "Hard"])
+study_duration = st.slider("📅 Duration (Months):", 1, 10, 6)
 
-# Buttons Layout
-col1, col2, col3 = st.columns([1, 1, 1])
-col4, col5, col6 = st.columns([1, 1, 1])
-col7, col8 = st.columns([1, 1])
+# Prompt templates
+input_prompts = {
+    "resume_review": "Review the resume against the job description, highlighting strengths and weaknesses.",
+    "match_percentage": "Evaluate the resume against the job description with percentage match and missing keywords.",
+    "learning_path": f"Create a {study_duration}-month personalized study plan for {company} Data Science role.",
+    "update_resume": "Optimize the resume for ATS with relevant skills and keywords. Return the updated resume text.",
+    "interview_qs": f"Generate 10 {difficulty} interview questions for {topic} for {company}.",
+    "data_science_qs": f"Generate 30 Data Science interview questions for {company}.",
+    "mcq_test": f"Generate a multiple-choice test with 10 {difficulty} level questions on {topic}, with 5 answer options each and the correct answer marked.",
+    "company_prep": f"Generate a question bank for {company} including both Logical Reasoning and Aptitude questions. Provide 10 questions for each category."
+}
 
-with col1:
-    submit1 = st.button("🔍 Resume Review")
-with col2:
-    submit3 = st.button("📊 Match Percentage")
-with col3:
-    submit4 = st.button("🎯 Learning Path")
-    study_duration = st.slider("📅 Duration (Months):", 1, 10, 6)
-with col4:
-    submit5 = st.button("📂 Update Resume")
-with col5:
-    submit6 = st.button("💬 Interview Qs")
-with col6:
-    submit7 = st.button("🧠 30 Data Science Qs")
-with col7:
-    submit8 = st.button("📝 Generate MCQ Test")
-with col8:
-    submit9 = st.button("📖 Company-Specific Prep")
+# Buttons Grid Layout
+buttons = list(input_prompts.keys())
+cols = st.columns(4)
+responses = {}
 
-# Prompts
-input_prompt1 = "Review the resume against the job description, highlighting strengths and weaknesses."
-input_prompt3 = "Evaluate the resume against the job description with percentage match and missing keywords."
-input_prompt4 = f"Create a {study_duration}-month personalized study plan for {company} Data Science role."
-input_prompt5 = "Optimize the resume for ATS with relevant skills and keywords."
-input_prompt6 = f"Generate 10 {difficulty} interview questions for {topic} for {company}."
-input_prompt7 = f"Generate 30 Data Science interview questions for {company}."
-input_prompt8 = f"Generate a multiple-choice test with 10 {difficulty} level questions on {topic}, with 5 answer options each and the correct answer marked."
-input_prompt9 = f"Generate a question bank for {company} including both Logical Reasoning and Aptitude questions. Provide 10 questions for each category."
+for idx, key in enumerate(buttons):
+    with cols[idx % 4]:
+        if st.button(f"{key.replace('_', ' ').title()}"):
+            if key == "update_resume" and uploaded_file:
+                pdf_reader = PyPDF2.PdfReader(uploaded_file)
+                resume_text = "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
+                response = get_gemini_response(resume_text, input_prompts[key])
+                pdf_buffer = BytesIO()
+                pdf_canvas = canvas.Canvas(pdf_buffer, pagesize=letter)
+                pdf_canvas.setFont("Helvetica", 12)
+                y_position = 750
+                for line in response.split("\n"):
+                    pdf_canvas.drawString(50, y_position, line)
+                    y_position -= 20
+                    if y_position < 50:
+                        pdf_canvas.showPage()
+                        y_position = 750
+                pdf_canvas.save()
+                pdf_buffer.seek(0)
+                st.subheader("📂 Updated Resume Recommendations")
+                st.write(response)
+                st.download_button("📥 Download Updated Resume", pdf_buffer, "Updated_Resume.pdf", "application/pdf")
+            else:
+                responses[key] = get_gemini_response(input_text, input_prompts[key])
 
-def get_gemini_response(input_text, prompt):
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    response = model.generate_content([input_text, prompt])
-    return response.text
-
-if submit4:
-    response = get_gemini_response(input_text, input_prompt4)
-    st.subheader(f"🎯 Learning Path for {company}")
+# Display responses in a structured layout
+for key, response in responses.items():
+    st.markdown("---")
+    st.subheader(f"📌 {key.replace('_', ' ').title()}")
     st.write(response)
 
-if submit6:
-    response = get_gemini_response(input_text, input_prompt6)
-    st.subheader(f"💬 Interview Questions for {company}")
+st.markdown("---")
+st.markdown("<h3 style='text-align: center;'>🛠 DSA for Data Science</h3>", unsafe_allow_html=True)
+
+# DSA Questions Section
+level = st.selectbox("📚 Select Difficulty Level:", ["Easy", "Intermediate", "Advanced"])
+if st.button(f"📝 Generate {level} DSA Questions"):
+    response = get_gemini_response("", f"Generate 10 DSA questions and answers for {level} level.")
     st.write(response)
 
-if submit8:
-    response = get_gemini_response(input_text, input_prompt8)
-    st.subheader("📝 MCQ Test")
-    
-    questions = response.split("\n\n")
-    user_answers = []
-    correct_answers = {}
-    
-    for i, q in enumerate(questions):
-        parts = q.split("\n")
-        if len(parts) >= 6:
-            question_text = parts[0]
-            options = parts[1:6]
-            correct_option = [opt for opt in options if "(Correct)" in opt]
-            
-            if correct_option:
-                correct_answers[i] = correct_option[0].replace("(Correct)", "").strip()
-            
-            user_choice = st.radio(question_text, options)
-            user_answers.append(user_choice)
-    
-    if st.button("Submit Test"):
-        score = sum(1 for i, ans in enumerate(user_answers) if ans.strip() == correct_answers.get(i, "").strip())
-        total_questions = len(correct_answers)
-        st.write(f"Your Score: {score}/{total_questions}")
-        
-        # Simulate performance analysis
-        st.subheader("📊 Performance Analysis")
-        categories = ["Python", "ML", "DL", "SQL", "Stats", "Viz"]
-        scores = np.random.randint(40, 100, size=6)
-        avg_score = np.mean(scores)
-        rankings = sorted(scores, reverse=True)
-        
-        fig, ax = plt.subplots()
-        ax.barh(categories, scores, color=['blue', 'red', 'green', 'purple', 'orange', 'cyan'])
-        ax.set_xlabel("Score (%)")
-        ax.set_title("Performance Analysis")
-        
-        for index, value in enumerate(scores):
-            ax.text(value + 2, index, str(value) + "%", va='center')
-        
-        st.pyplot(fig)
-        
-        st.write(f"**Your Average Score:** {avg_score:.2f}%")
-        if avg_score >= 75:
-            st.success("🎯 Excellent! You're well-prepared!")
-        elif avg_score >= 50:
-            st.warning("⚡ Decent, but work on weaker areas.")
-        else:
-            st.error("❌ Needs Improvement! Focus on weak areas.")
-        
-        # Rank Analysis
-        st.subheader("🏆 Rank Analysis")
-        rank = rankings.index(scores[0]) + 1
-        st.write(f"Your rank: {rank} out of {len(rankings)} participants.")
-
-if submit9:
-    response = get_gemini_response(input_text, input_prompt9)
-    st.subheader(f"📖 Logical & Aptitude Questions for {company}")
-    st.write(response)
+topic = st.selectbox("🗂 Select DSA Topic:", ["Arrays", "Linked Lists", "Trees", "Graphs", "Dynamic Programming", "Recursion", "Big O notation", "Sorting", "Searching"])
+if st.button(f"📖 Teach me {topic} with Case Studies"):
+    explanation = get_gemini_response("", f"Explain {topic} with examples and Python code.")
+    case_study = get_gemini_response("", f"Provide a real-world case study on {topic} for data science.")
+    st.write(explanation)
+    st.write(case_study)
